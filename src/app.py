@@ -29,21 +29,11 @@ import time
 from collections import defaultdict, deque
 from functools import wraps
 from pathlib import Path
-from typing import Any
-from werkzeug.middleware.proxy_fix import ProxyFix
-import requests
-from flask import (
-    Flask,
-    abort,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
-from werkzeug.middleware.proxy_fix import ProxyFix
+from typing import Any, Optional
 
+import requests
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 # ----------------------------
@@ -53,42 +43,41 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 
 app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
-
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-# Session secret; MUST be stable across restarts if you want sessions to survive.
-# Put FLASK_SECRET_KEY in .env for stable behavior.
+
+# Session secret: MUST be stable across restarts for persistent sessions.
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 
-# Mark cookies as secure/httponly when behind HTTPS (your nginx TLS).
+# Cookies: secure/httponly behind HTTPS reverse proxy.
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True,   # if you access via https
+    SESSION_COOKIE_SECURE=True,  # set False if testing over plain HTTP
     SESSION_COOKIE_SAMESITE="Lax",
 )
 
+# Secrets / OAuth config
 SERVER_SECRET = os.getenv("SERVER_SECRET", "dev-secret-change-me").encode()
-
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/callback")
 
+
 # ----------------------------
 # In-memory "DBs" (lab)
 # ----------------------------
-# Users:
 # users["alice"] = {"salt": "...hex...", "pw_hash": "...hex..."}
 users: dict[str, dict[str, str]] = {}
 
-# API keys:
 # keys_by_hash[hmac(raw_key)] = {"key_id": "...", "username": "...", "permissions": ["read"]}
 keys_by_hash: dict[str, dict[str, Any]] = {}
-user_key_hashes: defaultdict[str, list[str]] = defaultdict(list)   # username -> [key_hashes]
+user_key_hashes: defaultdict[str, list[str]] = defaultdict(list)  # username -> [key_hashes]
 keyid_to_hash: dict[str, str] = {}
 
 # Rate limiting (sliding window per key hash)
 RATE_LIMIT = 10
 WINDOW = 10
-request_log: defaultdict[str, deque] = defaultdict(deque)
+request_log: defaultdict[str, deque[float]] = defaultdict(deque)
+
 
 # ----------------------------
 # Helpers: hashing / passwords
@@ -96,14 +85,17 @@ request_log: defaultdict[str, deque] = defaultdict(deque)
 def hash_key(raw_key: str) -> str:
     return hmac.new(SERVER_SECRET, raw_key.encode(), hashlib.sha256).hexdigest()
 
+
 def pbkdf2_hash_password(password: str, salt_hex: str) -> str:
     salt = bytes.fromhex(salt_hex)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
     return dk.hex()
 
+
 def create_user(username: str, password: str) -> None:
-    salt = secrets.token_bytes(16).hex()
-    users[username] = {"salt": salt, "pw_hash": pbkdf2_hash_password(password, salt)}
+    salt_hex = secrets.token_bytes(16).hex()
+    users[username] = {"salt": salt_hex, "pw_hash": pbkdf2_hash_password(password, salt_hex)}
+
 
 def verify_user(username: str, password: str) -> bool:
     rec = users.get(username)
@@ -112,10 +104,11 @@ def verify_user(username: str, password: str) -> bool:
     candidate = pbkdf2_hash_password(password, rec["salt"])
     return hmac.compare_digest(candidate, rec["pw_hash"])
 
+
 # ----------------------------
 # API key functions
 # ----------------------------
-def create_api_key(username: str, permissions: list[str] | None = None) -> tuple[str, str]:
+def create_api_key(username: str, permissions: Optional[list[str]] = None) -> tuple[str, str]:
     if permissions is None:
         permissions = ["read"]
 
@@ -132,8 +125,10 @@ def create_api_key(username: str, permissions: list[str] | None = None) -> tuple
     keyid_to_hash[key_id] = key_hash
     return key_id, raw_key
 
-def verify_api_key(raw_key: str) -> dict[str, Any] | None:
+
+def verify_api_key(raw_key: str) -> Optional[dict[str, Any]]:
     return keys_by_hash.get(hash_key(raw_key))
+
 
 def sliding_window_check(key_hash: str) -> tuple[bool, int]:
     now = time.monotonic()
@@ -150,12 +145,13 @@ def sliding_window_check(key_hash: str) -> tuple[bool, int]:
     retry_after = int((log[0] + WINDOW) - now) + 1
     return False, max(retry_after, 1)
 
+
 # ----------------------------
-# Decorators
+# Decorators / session identity
 # ----------------------------
-def current_user() -> str | None:
-    # One unified session field regardless of auth method
+def current_user() -> Optional[str]:
     return session.get("user")
+
 
 def login_required(func):
     @wraps(func)
@@ -163,12 +159,16 @@ def login_required(func):
         if not current_user():
             return redirect(url_for("login_page"))
         return func(*args, **kwargs)
+
     return wrapper
+
 
 def api_key_required(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
+        raw_key = ""
+
         if auth.startswith("ApiKey "):
             raw_key = auth.split(" ", 1)[1].strip()
         else:
@@ -189,10 +189,13 @@ def api_key_required(func):
             resp.headers["Retry-After"] = str(retry_after)
             return resp
 
+        # Attach authenticated context
         request.user = info["username"]  # type: ignore[attr-defined]
         request.permissions = info.get("permissions", [])  # type: ignore[attr-defined]
         return func(*args, **kwargs)
+
     return wrapper
+
 
 # ----------------------------
 # Logging
@@ -203,23 +206,27 @@ def _before() -> None:
     ip = request.headers.get("X-Forwarded-For") or request.remote_addr
     print(f"[REQ] {request.method} {request.path} from {ip}")
 
+
 @app.after_request
 def _after(resp):
     dur_ms = (time.time() - getattr(request, "_start", time.time())) * 1000
     print(f"[DONE] {request.method} {request.path} {resp.status_code} in {dur_ms:.2f}ms")
     return resp
 
+
 # ----------------------------
-# Routes: landing/login
+# Routes: landing/logout
 # ----------------------------
 @app.route("/")
 def login_page():
     return render_template("login.html", user=current_user())
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login_page"))
+
 
 # ----------------------------
 # Routes: username/password auth
@@ -242,6 +249,7 @@ def signup():
     session["auth_method"] = "password"
     return redirect(url_for("dashboard"))
 
+
 @app.route("/login_password", methods=["POST"])
 def login_password():
     username = request.form.get("username", "").strip()
@@ -253,6 +261,7 @@ def login_password():
     session["user"] = username
     session["auth_method"] = "password"
     return redirect(url_for("dashboard"))
+
 
 # ----------------------------
 # Routes: GitHub OAuth
@@ -274,6 +283,7 @@ def login_github():
     }
     req = requests.Request("GET", "https://github.com/login/oauth/authorize", params=params).prepare()
     return redirect(req.url)
+
 
 @app.route("/callback")
 def callback():
@@ -298,6 +308,7 @@ def callback():
         timeout=10,
     )
     token_resp.raise_for_status()
+
     access_token = token_resp.json().get("access_token")
     if not access_token:
         abort(401, description="Failed to obtain access token")
@@ -308,18 +319,17 @@ def callback():
         timeout=10,
     )
     user_resp.raise_for_status()
-    gh_user = user_resp.json()
-    login = gh_user.get("login")
+
+    login = user_resp.json().get("login")
     if not login:
         abort(500, description="GitHub user response missing login")
 
-    # Unify session identity
     session["user"] = login
     session["auth_method"] = "github"
 
-    # Ensure key list exists
-    _ = user_key_hashes[login]
+    _ = user_key_hashes[login]  # ensure list exists
     return redirect(url_for("dashboard"))
+
 
 # ----------------------------
 # Routes: dashboard + keys
@@ -343,6 +353,7 @@ def dashboard():
         api_keys=keys,
     )
 
+
 @app.route("/create_key", methods=["POST"])
 @login_required
 def create_key_route():
@@ -351,6 +362,7 @@ def create_key_route():
 
     key_id, raw_key = create_api_key(username)
     return render_template("key_created.html", key_id=key_id, raw_key=raw_key)
+
 
 @app.route("/revoke_key", methods=["POST"])
 @login_required
@@ -377,6 +389,7 @@ def revoke_key_route():
 
     return redirect(url_for("dashboard"))
 
+
 # ----------------------------
 # API route
 # ----------------------------
@@ -391,6 +404,7 @@ def api_data():
             "permissions": getattr(request, "permissions", []),
         }
     )
+
 
 # ----------------------------
 # Errors
