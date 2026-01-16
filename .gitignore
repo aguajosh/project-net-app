@@ -1,0 +1,15 @@
+# virtual-env
+venv/
+__pycache__/
+
+# IDE / editor junk
+*.swp
+*.log
+
+# credentials & keys
+etc/cert.pem
+etc/key.pem
+.env
+
+# OS
+.DS_Store
