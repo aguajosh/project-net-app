@@ -35,10 +35,18 @@
         </div>
 
         <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-            <p class="font-medium text-slate-200">Test it</p>
+            <div class="flex items-center justify-between">
+                <p class="font-medium text-slate-200">Test it</p>
+                <button type="button" onclick="copyCmd(this)"
+                    class="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-sm text-slate-200 hover:bg-slate-700 active:bg-slate-600">
+                    Copy
+                </button>
+            </div>
+
             <pre
-                class="mt-2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-slate-200"><code>curl -k -H "Authorization: ApiKey {{ raw_key }}" https://23.22.223.117/api/data | jq</code></pre>
+                class="mt-2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-slate-200 overflow-x-auto"><code id="curl-cmd">curl -k -H "Authorization: ApiKey {{ raw_key }}" https://23.22.223.117/api/data | jq</code></pre>
         </div>
+
     </div>
 
     <div class="mt-6 flex items-center justify-between">
