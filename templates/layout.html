@@ -46,5 +46,21 @@
         <p>Lab UI (Tailwind CDN). Sessions + API keys. Deployed behind Nginx.</p>
     </footer>
 </body>
+<script>
+    function copyCmd(btn) {
+        const code = btn.closest("div").parentElement.querySelector("code").innerText;
+
+        navigator.clipboard.writeText(code).then(() => {
+            const original = btn.textContent;
+            btn.textContent = "Copied!";
+            btn.classList.add("bg-emerald-700");
+
+            setTimeout(() => {
+                btn.textContent = original;
+                btn.classList.remove("bg-emerald-700");
+            }, 1200);
+        });
+    }
+</script>
 
 </html>
