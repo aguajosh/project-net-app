@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+<p>You are logged in as: <b>{{ username }}</b></p>
+<h3>Your API keys</h3>
+<ul>
+    {% for key in api_keys %}
+    <li>{{ key.value }} ({{ key.permissions|join(', ') }})</li>
+    {% endfor %}
+</ul>
+<form method="post" action="/create_key">
+    <button type="submit">Generate API Key</button>
+</form>
+<form method="post" action="/revoke_key">
+    <label>API Key to revoke: <input name="key" /></label>
+    <button type="submit">Revoke</button>
+</form>
+<p><a href="/logout">Logout</a></p>
+{% endblock %}
