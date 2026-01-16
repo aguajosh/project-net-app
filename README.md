@@ -75,7 +75,7 @@ Create a `.env` file in the project root:
 ```env
 GITHUB_CLIENT_ID=xxxxxxxx
 GITHUB_CLIENT_SECRET=xxxxxxxx
-GITHUB_REDIRECT_URI=https://YOUR_PUBLIC_IP/callback
+GITHUB_REDIRECT_URI=https://23.22.223.117/callback
 FLASK_SECRET_KEY=super-secret-session-key
 SERVER_SECRET=server-hmac-secret
 ```
@@ -185,7 +185,7 @@ X-Api-Key: <RAW_KEY>
 ```bash
 curl -k \
   -H "Authorization: ApiKey YOUR_RAW_KEY" \
-  https://YOUR_PUBLIC_IP/api/data | jq
+  https://23.22.223.117/api/data | jq
 ```
 
 Expected response:
@@ -212,7 +212,7 @@ Automated smoke test:
 
 ```bash
 source venv/bin/activate
-python tests/test_app.py --base https://YOUR_PUBLIC_IP --insecure
+python tests/test_app.py --base https://23.22.223.117 --insecure
 ```
 
 ---
