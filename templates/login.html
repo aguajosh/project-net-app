@@ -1,7 +1,72 @@
 {% extends "layout.html" %}
 {% block title %}Login{% endblock %}
 {% block content %}
-<h2>Login</h2>
-<p>Click to log in with GitHub.</p>
-<a href="/login">Login with GitHub</a>
+
+<div class="grid gap-6 md:grid-cols-2">
+    <!-- Left: header -->
+    <div class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+        <h1 class="text-2xl font-semibold tracking-tight">Sign in</h1>
+        <p class="mt-2 text-sm text-slate-400">
+            Use GitHub OAuth or a local username/password account.
+        </p>
+
+        <div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-300">
+            <p class="font-medium text-slate-200">API Key header formats</p>
+            <p class="mt-2 text-slate-400">Use either:</p>
+            <ul class="mt-2 list-disc pl-5 text-slate-400">
+                <li><code class="text-slate-200">Authorization: ApiKey &lt;raw_key&gt;</code></li>
+                <li><code class="text-slate-200">X-Api-Key: &lt;raw_key&gt;</code></li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Right: auth methods -->
+    <div class="space-y-6">
+
+        <!-- GitHub OAuth -->
+        <section class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+            <h2 class="text-lg font-semibold">GitHub OAuth</h2>
+            <p class="mt-1 text-sm text-slate-400">Redirect to GitHub, then back to your app.</p>
+
+            <a href="/login_github"
+                class="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-200">
+                Continue with GitHub
+            </a>
+        </section>
+
+        <!-- Username/password -->
+        <section class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+            <h2 class="text-lg font-semibold">Username / Password</h2>
+            <p class="mt-1 text-sm text-slate-400">Local lab account stored in-memory (demo).</p>
+
+            <form class="mt-4 space-y-3" method="post" action="/login_password">
+                <div>
+                    <label class="text-xs text-slate-400">Username</label>
+                    <input name="username" autocomplete="username"
+                        class="mt-1 w-full rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm outline-none focus:border-slate-500"
+                        placeholder="josh" />
+                </div>
+
+                <div>
+                    <label class="text-xs text-slate-400">Password</label>
+                    <input name="password" type="password" autocomplete="current-password"
+                        class="mt-1 w-full rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm outline-none focus:border-slate-500"
+                        placeholder="••••••••" />
+                </div>
+
+                <button type="submit"
+                    class="w-full rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-white">
+                    Sign in
+                </button>
+
+                <p class="text-sm text-slate-400">
+                    New user?
+                    <a class="text-slate-200 underline hover:text-white" href="/signup">Create an account</a>
+                </p>
+            </form>
+        </section>
+
+    </div>
+</div>
+
 {% endblock %}

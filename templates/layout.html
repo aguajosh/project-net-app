@@ -1,13 +1,50 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <title>{% block title %}Flask OAuth App{% endblock %}</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{% block title %}Project App{% endblock %}</title>
+
+    <!-- Tailwind (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        /* Small helpers so code blocks look good */
+        pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+    </style>
 </head>
 
-<body>
-    {% block content %}{% endblock %}
+<body class="min-h-screen bg-slate-950 text-slate-100">
+    <header class="border-b border-slate-800 bg-slate-950/80 backdrop-blur">
+        <div class="mx-auto max-w-5xl px-4 py-4 flex items-center justify-between">
+            <a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
+                <span class="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-slate-800">🔐</span>
+                <span>OAuth + API Keys</span>
+            </a>
+
+            <nav class="flex items-center gap-2 text-sm">
+                <a class="rounded-lg px-3 py-2 hover:bg-slate-900" href="/">Home</a>
+                {% if user %}
+                <a class="rounded-lg px-3 py-2 hover:bg-slate-900" href="/dashboard">Dashboard</a>
+                <a class="rounded-lg px-3 py-2 hover:bg-slate-900" href="/logout">Logout</a>
+                {% else %}
+                <a class="rounded-lg px-3 py-2 hover:bg-slate-900" href="/signup">Sign up</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+
+    <main class="mx-auto max-w-5xl px-4 py-10">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="mx-auto max-w-5xl px-4 pb-10 text-xs text-slate-500">
+        <p>Lab UI (Tailwind CDN). Sessions + API keys. Deployed behind Nginx.</p>
+    </footer>
 </body>
 
 </html>

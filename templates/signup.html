@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+{% block title %}Sign up{% endblock %}
+{% block content %}
+
+<div class="mx-auto max-w-lg rounded-2xl border border-slate-800 bg-slate-950 p-6">
+    <h1 class="text-2xl font-semibold tracking-tight">Create account</h1>
+    <p class="mt-2 text-sm text-slate-400">For the lab, users are stored in-memory.</p>
+
+    <form class="mt-6 space-y-3" method="post" action="/signup">
+        <div>
+            <label class="text-xs text-slate-400">Username</label>
+            <input name="username" autocomplete="username"
+                class="mt-1 w-full rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="josh" />
+        </div>
+
+        <div>
+            <label class="text-xs text-slate-400">Password</label>
+            <input name="password" type="password" autocomplete="new-password"
+                class="mt-1 w-full rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="••••••••" />
+        </div>
+
+        <button type="submit"
+            class="w-full rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-white">
+            Create account
+        </button>
+
+        <p class="text-sm text-slate-400">
+            <a class="text-slate-200 underline hover:text-white" href="/">Back to login</a>
+        </p>
+    </form>
+</div>
+
+{% endblock %}

@@ -1,23 +1,36 @@
 """
-Flask application combining API‑key authentication, GitHub OAuth login,
-rate limiting and Jinja2 templates.
+OAuth + Username/Password API-Key Service (lab version)
 
-Environment variables required:
-* GITHUB_CLIENT_ID
-* GITHUB_CLIENT_SECRET
-* GITHUB_REDIRECT_URI (e.g. http://localhost:8000/callback)
-* FLASK_SECRET_KEY (optional)
-* SERVER_SECRET (optional; used to hash API keys)
+Supports:
+- GitHub OAuth login
+- Username/password signup + login (in-memory)
+- API keys (raw shown once, store only HMAC hash)
+- Revoke keys
+- Logout
+- login_required for web routes
+- api_key_required for API routes
+- request logging (method, path, client IP, duration)
+
+Env vars:
+- GITHUB_CLIENT_ID
+- GITHUB_CLIENT_SECRET
+- GITHUB_REDIRECT_URI (http://localhost:8000/callback)
+- FLASK_SECRET_KEY
+- SERVER_SECRET
 """
 
-import hmac
+from __future__ import annotations
+
 import hashlib
+import hmac
 import os
 import secrets
 import time
 from collections import defaultdict, deque
 from functools import wraps
-
+from pathlib import Path
+from typing import Any
+from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
 from flask import (
     Flask,
@@ -29,81 +42,145 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-app = Flask(__name__)
 
-# Session secret; generate a random one if unset.
+
+# ----------------------------
+# Paths / App
+# ----------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent
+TEMPLATES_DIR = BASE_DIR / "templates"
+
+app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+# Session secret; MUST be stable across restarts if you want sessions to survive.
+# Put FLASK_SECRET_KEY in .env for stable behavior.
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 
-# Server secret for HMAC; required to hash and verify API keys.
+# Mark cookies as secure/httponly when behind HTTPS (your nginx TLS).
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,   # if you access via https
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
 SERVER_SECRET = os.getenv("SERVER_SECRET", "dev-secret-change-me").encode()
 
-# GitHub OAuth configuration.
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/callback")
 
-# In‑memory storage for API keys.  Keys are indexed by their HMAC hash.
-api_keys_db: dict[str, dict] = {}
-user_keys: defaultdict[str, list[str]] = defaultdict(list)
+# ----------------------------
+# In-memory "DBs" (lab)
+# ----------------------------
+# Users:
+# users["alice"] = {"salt": "...hex...", "pw_hash": "...hex..."}
+users: dict[str, dict[str, str]] = {}
 
-# Sliding‑window rate limiter parameters.
-RATE_LIMIT = 10   # allowed requests
-WINDOW = 10       # seconds
+# API keys:
+# keys_by_hash[hmac(raw_key)] = {"key_id": "...", "username": "...", "permissions": ["read"]}
+keys_by_hash: dict[str, dict[str, Any]] = {}
+user_key_hashes: defaultdict[str, list[str]] = defaultdict(list)   # username -> [key_hashes]
+keyid_to_hash: dict[str, str] = {}
+
+# Rate limiting (sliding window per key hash)
+RATE_LIMIT = 10
+WINDOW = 10
 request_log: defaultdict[str, deque] = defaultdict(deque)
 
-def hash_key(api_key: str) -> str:
-    """Return a hexadecimal HMAC hash of the provided API key."""
-    return hmac.new(SERVER_SECRET, api_key.encode(), hashlib.sha256).hexdigest()
+# ----------------------------
+# Helpers: hashing / passwords
+# ----------------------------
+def hash_key(raw_key: str) -> str:
+    return hmac.new(SERVER_SECRET, raw_key.encode(), hashlib.sha256).hexdigest()
 
-def create_api_key(username: str, permissions: list[str] | None = None) -> str:
-    """
-    Generate a new API key, store its hash and return the raw key.  Keys are
-    long, random values as recommended.
-    """
+def pbkdf2_hash_password(password: str, salt_hex: str) -> str:
+    salt = bytes.fromhex(salt_hex)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return dk.hex()
+
+def create_user(username: str, password: str) -> None:
+    salt = secrets.token_bytes(16).hex()
+    users[username] = {"salt": salt, "pw_hash": pbkdf2_hash_password(password, salt)}
+
+def verify_user(username: str, password: str) -> bool:
+    rec = users.get(username)
+    if not rec:
+        return False
+    candidate = pbkdf2_hash_password(password, rec["salt"])
+    return hmac.compare_digest(candidate, rec["pw_hash"])
+
+# ----------------------------
+# API key functions
+# ----------------------------
+def create_api_key(username: str, permissions: list[str] | None = None) -> tuple[str, str]:
     if permissions is None:
         permissions = ["read"]
+
     raw_key = secrets.token_urlsafe(32)
     key_hash = hash_key(raw_key)
-    api_keys_db[key_hash] = {"username": username, "permissions": permissions}
-    user_keys[username].append(key_hash)
-    return raw_key
+    key_id = secrets.token_hex(16)
 
-def verify_api_key(raw_key: str) -> dict | None:
-    """Return key info if the raw key matches a stored hash, else None."""
-    key_hash = hash_key(raw_key)
-    return api_keys_db.get(key_hash)
+    keys_by_hash[key_hash] = {
+        "key_id": key_id,
+        "username": username,
+        "permissions": permissions,
+    }
+    user_key_hashes[username].append(key_hash)
+    keyid_to_hash[key_id] = key_hash
+    return key_id, raw_key
+
+def verify_api_key(raw_key: str) -> dict[str, Any] | None:
+    return keys_by_hash.get(hash_key(raw_key))
 
 def sliding_window_check(key_hash: str) -> tuple[bool, int]:
-    """
-    Per‑key sliding‑window rate limiter.  Maintains a deque of timestamps
-    for each key and enforces limit and retry logic.
-    """
     now = time.monotonic()
     log = request_log[key_hash]
     cutoff = now - WINDOW
+
     while log and log[0] < cutoff:
         log.popleft()
+
     if len(log) < RATE_LIMIT:
         log.append(now)
         return True, 0
+
     retry_after = int((log[0] + WINDOW) - now) + 1
     return False, max(retry_after, 1)
 
+# ----------------------------
+# Decorators
+# ----------------------------
+def current_user() -> str | None:
+    # One unified session field regardless of auth method
+    return session.get("user")
+
+def login_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not current_user():
+            return redirect(url_for("login_page"))
+        return func(*args, **kwargs)
+    return wrapper
+
 def api_key_required(func):
-    """Decorator enforcing API‑key authentication and rate limiting."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
         if auth.startswith("ApiKey "):
-            raw_key = auth.split(" ", 1)[1]
+            raw_key = auth.split(" ", 1)[1].strip()
         else:
-            raw_key = request.headers.get("X-Api-Key", "")
+            raw_key = request.headers.get("X-Api-Key", "").strip()
+
         if not raw_key:
             return jsonify({"error": "missing_api_key"}), 401
+
         info = verify_api_key(raw_key)
         if not info:
             return jsonify({"error": "invalid_api_key"}), 401
+
         key_hash = hash_key(raw_key)
         allowed, retry_after = sliding_window_check(key_hash)
         if not allowed:
@@ -111,47 +188,83 @@ def api_key_required(func):
             resp.status_code = 429
             resp.headers["Retry-After"] = str(retry_after)
             return resp
-        request.user = info["username"]
-        request.permissions = info["permissions"]
+
+        request.user = info["username"]  # type: ignore[attr-defined]
+        request.permissions = info.get("permissions", [])  # type: ignore[attr-defined]
         return func(*args, **kwargs)
     return wrapper
 
-def login_required(func):
-    """Decorator ensuring that a user is logged in via OAuth."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if "github_user" not in session:
-            return redirect(url_for("login_page"))
-        return func(*args, **kwargs)
-    return wrapper
-
+# ----------------------------
+# Logging
+# ----------------------------
 @app.before_request
-def before_request():
-    """Log incoming requests and record start time."""
-    request.start_time = time.time()
-    ua = request.headers.get("User-Agent", "unknown")
+def _before() -> None:
+    request._start = time.time()  # type: ignore[attr-defined]
     ip = request.headers.get("X-Forwarded-For") or request.remote_addr
-    print(f"[REQ] {request.method} {request.path} from {ip} UA={ua}")
+    print(f"[REQ] {request.method} {request.path} from {ip}")
 
 @app.after_request
-def after_request(response):
-    """Log request duration."""
-    duration_ms = (time.time() - request.start_time) * 1000
-    print(f"[DONE] {request.method} {request.path} {response.status_code} in {duration_ms:.2f}ms")
-    return response
+def _after(resp):
+    dur_ms = (time.time() - getattr(request, "_start", time.time())) * 1000
+    print(f"[DONE] {request.method} {request.path} {resp.status_code} in {dur_ms:.2f}ms")
+    return resp
 
+# ----------------------------
+# Routes: landing/login
+# ----------------------------
 @app.route("/")
 def login_page():
-    """Show the OAuth login link."""
-    return render_template("login.html")
+    return render_template("login.html", user=current_user())
 
-@app.route("/login")
-def login():
-    """Redirect user to GitHub to authorize this application."""
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login_page"))
+
+# ----------------------------
+# Routes: username/password auth
+# ----------------------------
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "GET":
+        return render_template("signup.html")
+
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+
+    if not username or not password:
+        return ("Missing username or password", 400)
+    if username in users:
+        return ("Username already exists", 400)
+
+    create_user(username, password)
+    session["user"] = username
+    session["auth_method"] = "password"
+    return redirect(url_for("dashboard"))
+
+@app.route("/login_password", methods=["POST"])
+def login_password():
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+
+    if not verify_user(username, password):
+        return ("Invalid username/password", 401)
+
+    session["user"] = username
+    session["auth_method"] = "password"
+    return redirect(url_for("dashboard"))
+
+# ----------------------------
+# Routes: GitHub OAuth
+# ----------------------------
+@app.route("/login_github")
+def login_github():
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
         abort(500, description="Missing GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET env vars")
+
     state = secrets.token_urlsafe(24)
     session["oauth_state"] = state
+
     params = {
         "client_id": GITHUB_CLIENT_ID,
         "redirect_uri": GITHUB_REDIRECT_URI,
@@ -159,23 +272,20 @@ def login():
         "state": state,
         "allow_signup": "true",
     }
-    auth_url = "https://github.com/login/oauth/authorize"
-    req = requests.Request("GET", auth_url, params=params).prepare()
+    req = requests.Request("GET", "https://github.com/login/oauth/authorize", params=params).prepare()
     return redirect(req.url)
 
 @app.route("/callback")
 def callback():
-    """
-    OAuth callback.  Exchanges the code for a token, fetches the user
-    info from GitHub and stores it in the session.
-    """
     code = request.args.get("code", "")
     state = request.args.get("state", "")
     expected_state = session.get("oauth_state", "")
+
     if not code:
         abort(400, description="Missing code")
     if not state or state != expected_state:
         abort(400, description="Invalid state")
+
     token_resp = requests.post(
         "https://github.com/login/oauth/access_token",
         headers={"Accept": "application/json"},
@@ -188,90 +298,103 @@ def callback():
         timeout=10,
     )
     token_resp.raise_for_status()
-    token_json = token_resp.json()
-    access_token = token_json.get("access_token")
+    access_token = token_resp.json().get("access_token")
     if not access_token:
         abort(401, description="Failed to obtain access token")
+
     user_resp = requests.get(
         "https://api.github.com/user",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/vnd.github+json",
-        },
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"},
         timeout=10,
     )
     user_resp.raise_for_status()
-    user = user_resp.json()
-    session["github_user"] = {
-        "login": user.get("login"),
-        "id": user.get("id"),
-    }
-    # ensure an entry exists for this user
-    _ = user_keys[session["github_user"]["login"]]
+    gh_user = user_resp.json()
+    login = gh_user.get("login")
+    if not login:
+        abort(500, description="GitHub user response missing login")
+
+    # Unify session identity
+    session["user"] = login
+    session["auth_method"] = "github"
+
+    # Ensure key list exists
+    _ = user_key_hashes[login]
     return redirect(url_for("dashboard"))
 
+# ----------------------------
+# Routes: dashboard + keys
+# ----------------------------
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    """Show the dashboard and list the current user's API keys."""
-    username = session["github_user"]["login"]
-    keys: list[dict] = []
-    for key_hash in user_keys.get(username, []):
-        info = api_keys_db.get(key_hash)
-        if info:
-            keys.append({"value": key_hash, "permissions": info.get("permissions", [])})
-    return render_template("dashboard.html", username=username, api_keys=keys)
+    username = current_user()
+    assert username is not None
+
+    keys: list[dict[str, Any]] = []
+    for key_hash in user_key_hashes.get(username, []):
+        rec = keys_by_hash.get(key_hash)
+        if rec:
+            keys.append({"id": rec["key_id"], "permissions": rec.get("permissions", [])})
+
+    return render_template(
+        "dashboard.html",
+        username=username,
+        auth_method=session.get("auth_method", "unknown"),
+        api_keys=keys,
+    )
 
 @app.route("/create_key", methods=["POST"])
 @login_required
 def create_key_route():
-    """Generate a new API key and display it once to the user."""
-    username = session["github_user"]["login"]
-    raw_key = create_api_key(username)
-    return (
-        f"<p>Here is your new API key.  Copy it now; it will never be shown again.</p>"
-        f"<pre>{raw_key}</pre>"
-        f"<p><a href='/dashboard'>Back to dashboard</a></p>"
-    )
+    username = current_user()
+    assert username is not None
+
+    key_id, raw_key = create_api_key(username)
+    return render_template("key_created.html", key_id=key_id, raw_key=raw_key)
 
 @app.route("/revoke_key", methods=["POST"])
 @login_required
 def revoke_key_route():
-    """Revoke an API key owned by the current user."""
-    username = session["github_user"]["login"]
-    key_hash = request.form.get("key", "").strip()
-    if not key_hash:
-        return ("<p>Missing key.</p><p><a href='/dashboard'>Back</a></p>", 400)
-    info = api_keys_db.get(key_hash)
-    if info and info.get("username") == username:
-        api_keys_db.pop(key_hash, None)
-        if key_hash in user_keys.get(username, []):
-            user_keys[username].remove(key_hash)
-        return ("<p>API key revoked.</p><p><a href='/dashboard'>Back to dashboard</a></p>",)
-    return (
-        "<p>Key not found or you do not own it.</p><p><a href='/dashboard'>Back</a></p>",
-        404,
-    )
+    username = current_user()
+    assert username is not None
 
+    key_id = request.form.get("key_id", "").strip()
+    if not key_id:
+        return ("Missing key id", 400)
+
+    key_hash = keyid_to_hash.get(key_id)
+    if not key_hash:
+        return ("Key not found", 404)
+
+    rec = keys_by_hash.get(key_hash)
+    if not rec or rec.get("username") != username:
+        return ("Key not found or not owned by you", 404)
+
+    keys_by_hash.pop(key_hash, None)
+    keyid_to_hash.pop(key_id, None)
+    if key_hash in user_key_hashes.get(username, []):
+        user_key_hashes[username].remove(key_hash)
+
+    return redirect(url_for("dashboard"))
+
+# ----------------------------
+# API route
+# ----------------------------
 @app.route("/api/data")
 @api_key_required
 def api_data():
-    """Return a JSON payload for API clients."""
     return jsonify(
         {
             "service": "api",
             "status": "ok",
-            "user": request.user,
-            "permissions": request.permissions,
+            "user": getattr(request, "user", None),
+            "permissions": getattr(request, "permissions", []),
         }
     )
 
-@app.route("/logout")
-def logout():
-    """Clear the session and return to the login page."""
-    session.clear()
-    return redirect(url_for("login_page"))
-
+# ----------------------------
+# Errors
+# ----------------------------
 @app.errorhandler(400)
 @app.errorhandler(401)
 @app.errorhandler(403)
@@ -279,9 +402,4 @@ def logout():
 @app.errorhandler(429)
 @app.errorhandler(500)
 def handle_error(e):
-    """Return simple error messages."""
     return f"{e.code} {e.name}: {e.description}", e.code
-
-if __name__ == "__main__":
-    # Run the Flask server on localhost without SSL.  Nginx handles TLS.
-    app.run(host="127.0.0.1", port=5000, debug=True)

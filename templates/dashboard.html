@@ -1,20 +1,86 @@
 {% extends "layout.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<h2>Dashboard</h2>
-<p>You are logged in as: <b>{{ username }}</b></p>
-<h3>Your API keys</h3>
-<ul>
-    {% for key in api_keys %}
-    <li>{{ key.value }} ({{ key.permissions|join(', ') }})</li>
-    {% endfor %}
-</ul>
-<form method="post" action="/create_key">
-    <button type="submit">Generate API Key</button>
-</form>
-<form method="post" action="/revoke_key">
-    <label>API Key to revoke: <input name="key" /></label>
-    <button type="submit">Revoke</button>
-</form>
-<p><a href="/logout">Logout</a></p>
+
+<div class="flex flex-col gap-6">
+    <section class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
+                <p class="mt-1 text-sm text-slate-400">
+                    Signed in as <span class="text-slate-200 font-medium">{{ username }}</span>
+                    {% if auth_method %}
+                    <span
+                        class="ml-2 inline-flex items-center rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-xs text-slate-300">
+                        {{ auth_method }}
+                    </span>
+                    {% endif %}
+                </p>
+            </div>
+
+            <form method="post" action="/create_key">
+                <button type="submit"
+                    class="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-200">
+                    + Generate API key
+                </button>
+            </form>
+        </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-lg font-semibold">Your API keys</h2>
+        <p class="mt-1 text-sm text-slate-400">
+            You will only see the <em>raw</em> API key once (on creation). Store it securely.
+        </p>
+
+        <div class="mt-4 overflow-hidden rounded-xl border border-slate-800">
+            <table class="min-w-full divide-y divide-slate-800 text-sm">
+                <thead class="bg-slate-900/40">
+                    <tr>
+                        <th class="px-4 py-3 text-left font-medium text-slate-300">Key ID</th>
+                        <th class="px-4 py-3 text-left font-medium text-slate-300">Permissions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800 bg-slate-950">
+                    {% for k in api_keys %}
+                    <tr>
+                        <td class="px-4 py-3">
+                            <code class="text-slate-200">{{ k.id }}</code>
+                        </td>
+                        <td class="px-4 py-3 text-slate-300">
+                            {% if k.permissions %}{{ k.permissions|join(", ") }}{% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td class="px-4 py-6 text-center text-slate-500" colspan="2">No keys yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+            <h3 class="font-semibold">Revoke a key</h3>
+            <p class="mt-1 text-sm text-slate-400">Paste the Key ID (not the raw key) to revoke.</p>
+
+            <form class="mt-3 flex flex-col gap-3 sm:flex-row" method="post" action="/revoke_key">
+                <input name="key_id"
+                    class="flex-1 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-slate-500"
+                    placeholder="paste Key ID here" />
+                <button type="submit"
+                    class="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-500">
+                    Revoke
+                </button>
+            </form>
+        </div>
+
+        <div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm">
+            <p class="font-medium text-slate-200">Quick curl test</p>
+            <pre
+                class="mt-2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-slate-200"><code>curl -k -H "Authorization: ApiKey &lt;RAW_KEY&gt;" https://YOUR_HOST/api/data | jq</code></pre>
+        </div>
+    </section>
+</div>
+
 {% endblock %}

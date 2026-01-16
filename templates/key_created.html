@@ -1,0 +1,53 @@
+{% extends "layout.html" %}
+{% block title %}API Key Created{% endblock %}
+{% block content %}
+
+<div class="mx-auto max-w-2xl rounded-2xl border border-slate-800 bg-slate-950 p-6">
+    <h1 class="text-2xl font-semibold tracking-tight">API key created</h1>
+    <p class="mt-2 text-sm text-slate-400">
+        Copy the raw key now. It will not be shown again.
+    </p>
+
+    <div class="mt-6 space-y-4">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+            <p class="text-sm text-slate-400">Key ID (used for revoke)</p>
+            <div class="mt-2 flex items-center justify-between gap-3">
+                <code id="keyId" class="text-slate-200">{{ key_id }}</code>
+                <button type="button"
+                    class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-900"
+                    onclick="navigator.clipboard.writeText(document.getElementById('keyId').innerText)">
+                    Copy
+                </button>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+            <p class="text-sm text-slate-400">Raw API key (shown once)</p>
+            <div class="mt-2 flex items-start justify-between gap-3">
+                <pre
+                    class="flex-1 rounded-xl border border-slate-800 bg-slate-950 p-3 text-slate-200"><code id="rawKey">{{ raw_key }}</code></pre>
+                <button type="button"
+                    class="mt-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-900"
+                    onclick="navigator.clipboard.writeText(document.getElementById('rawKey').innerText)">
+                    Copy
+                </button>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+            <p class="font-medium text-slate-200">Test it</p>
+            <pre
+                class="mt-2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-slate-200"><code>curl -k -H "Authorization: ApiKey {{ raw_key }}" https://YOUR_HOST/api/data | jq</code></pre>
+        </div>
+    </div>
+
+    <div class="mt-6 flex items-center justify-between">
+        <a class="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm hover:bg-slate-900"
+            href="/dashboard">
+            Back to dashboard
+        </a>
+        <a class="text-sm text-slate-300 underline hover:text-white" href="/logout">Logout</a>
+    </div>
+</div>
+
+{% endblock %}
